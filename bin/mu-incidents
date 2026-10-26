@@ -45,6 +45,7 @@ import json
 import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -206,7 +207,7 @@ def incident_url(incident):
     return f"{SMELT}/incident/{incident['number']}/"
 
 
-def flavors(number):
+def flavors(incident):
     """The openQA flavors qem-bot scheduled for this incident, with counts.
 
     Returns None if the lookup failed, {} if the incident has no settings at
@@ -214,7 +215,13 @@ def flavors(number):
     incident with no jobs is either younger than the 8-hourly auto-schedule.sh
     cron on void.suse.de, or that cron is stuck and it needs a manual push.
     """
-    settings = get_json_or_none(f"{DASHBOARD}/api/incident_settings/{number}")
+    # The dashboard refuses this without the incident's own project and type.
+    query = urllib.parse.urlencode(
+        {"project": incident.get("project", ""), "type": incident.get("type", "")}
+    )
+    settings = get_json_or_none(
+        f"{DASHBOARD}/api/incident_settings/{incident.get('number')}?{query}"
+    )
     if settings is None:
         return None
     counts = {}
@@ -276,7 +283,7 @@ def collect(args, watch_stems):
         }
 
         if not args.fast:
-            counts = flavors(row["number"])
+            counts = flavors(incident)
             row["flavors"] = counts
             row["our_flavors"] = (
                 {

@@ -120,19 +120,43 @@ def failing_module(job_id):
 
 
 @lru_cache(maxsize=None)
-def incident_state(number):
+def active_incidents():
+    """Every active incident on the QAM dashboard, keyed by (type, number).
+
+    One GET for the lot. /api/incidents/<n> now refuses to answer without the
+    incident's project and type, which a job's settings do not carry, and the
+    list has the same fields anyway. None if the dashboard is unreachable.
+    """
+    incidents = get_json_or_none(f"{DASHBOARD}/api/incidents")
+    if incidents is None:
+        return None
+    return {(i.get("type"), str(i.get("number"))): i for i in incidents}
+
+
+def incident_type(build):
+    """smelt or git, from a BUILD like :smelt:46234:libvirt or :git:7384:libvirt."""
+    match = re.match(r":(smelt|git):", build or "")
+    return match.group(1) if match else None
+
+
+def incident_state(number, build):
     """(marker, moot) for an incident number, from the QAM dashboard.
 
-    The dashboard only carries *active* incidents, so a 404 means the update has
-    been released or withdrawn -- which is as good a reason to skip the job as an
-    explicit approval. A dashboard outage returns None and leaves the row alone.
+    The dashboard only carries *active* incidents, so one missing from the list
+    has been released or withdrawn -- which is as good a reason to skip the job
+    as an explicit approval. A dashboard outage returns None and leaves the row
+    alone.
     """
-    try:
-        incident = get_json(f"{DASHBOARD}/api/incidents/{number}")
-    except urllib.error.HTTPError as error:
-        return (MOOT, True) if error.code == 404 else (OPEN, False)
-    except (urllib.error.URLError, OSError, ValueError):
+    active = active_incidents()
+    if active is None:
         return None
+    kind = incident_type(build)
+    if kind:
+        incident = active.get((kind, str(number)))
+    else:
+        incident = next((i for (_, n), i in active.items() if n == str(number)), None)
+    if incident is None:
+        return (MOOT, True)
     moot = incident.get("approved") or not incident.get("isActive")
     return (MOOT, True) if moot else (OPEN, False)
 
@@ -145,7 +169,7 @@ def collect(gids, days):
             incident = settings.get("INCIDENT_ID")
             marker, moot = NONE, False
             if incident:
-                state = incident_state(incident)
+                state = incident_state(incident, settings.get("BUILD"))
                 if state:
                     marker, moot = state
             reviewed = has_bugref(job["id"])
